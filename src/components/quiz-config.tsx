@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useActionState } from 'react';
 import { useFormStatus } from 'react-dom';
-import { generateQuizAction, extractTextFromFileAction } from '@/app/actions';
+import { generateQuizAction, extractTextFromFileAction, generateSignedUploadUrlAction } from '@/app/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -47,6 +47,8 @@ export default function QuizConfig({ onQuizGenerated }: QuizConfigProps) {
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionSuccess, setExtractionSuccess] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState('');
+
 
   useEffect(() => {
     if (state.error) {
@@ -60,67 +62,80 @@ export default function QuizConfig({ onQuizGenerated }: QuizConfigProps) {
       onQuizGenerated(state.quiz, state.text);
     }
   }, [state, onQuizGenerated, toast]);
-  
+
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file) {
-      setIsExtracting(true);
-      setExtractionSuccess(false);
-      setProgress(0);
-      setActiveTab('paste'); // Switch to paste tab to show loader over textarea
+    if (!file) return;
 
-      // Simulate progress
-      const interval = setInterval(() => {
-        setProgress((prev) => {
-          if (prev >= 95) {
-            clearInterval(interval);
-            return 95;
-          }
-          return prev + 5;
-        });
-      }, 2500); // Slower progress
+    setIsExtracting(true);
+    setExtractionSuccess(false);
+    setProgress(0);
+    setUploadStatus('Getting upload URL...');
+    setActiveTab('paste'); // Switch to paste tab to show loader over textarea
 
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const fileDataUri = e.target?.result as string;
-        const result = await extractTextFromFileAction({ fileDataUri });
-        
-        clearInterval(interval);
-        setProgress(100);
-        setIsExtracting(false);
+    try {
+      // 1. Get signed URL from server
+      const signedUrlResult = await generateSignedUploadUrlAction({
+        fileName: file.name,
+        contentType: file.type,
+      });
 
-        if (result.error) {
-          toast({
-            variant: 'destructive',
-            title: 'Extraction Error',
-            description: result.error,
-          });
-          setTextContent('');
-        } else if (result.text) {
-          setTextContent(result.text);
-          setExtractionSuccess(true);
-          setTimeout(() => {
-            setExtractionSuccess(false);
-          }, 3000);
+      if ('error' in signedUrlResult) {
+        throw new Error(signedUrlResult.error);
+      }
+      
+      const { url, filePath } = signedUrlResult;
+
+      // 2. Upload file to Firebase Storage
+      setUploadStatus('Uploading file...');
+      setProgress(50); // Simulate progress
+      
+      const response = await fetch(url, {
+        method: 'PUT',
+        body: file,
+        headers: {
+          'Content-Type': file.type,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('File upload failed.');
+      }
+      
+      setProgress(75);
+      setUploadStatus('Extracting text...');
+
+      // 3. Call action to extract text from the uploaded file
+      const result = await extractTextFromFileAction({ filePath });
+
+      setProgress(100);
+      setIsExtracting(false);
+
+      if (result.error) {
+        throw new Error(result.error);
+      } else if (result.text) {
+        setTextContent(result.text);
+        setExtractionSuccess(true);
+        setTimeout(() => {
+          setExtractionSuccess(false);
+        }, 3000);
+      }
+    } catch (error) {
+      setIsExtracting(false);
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: (error as Error).message || 'An unexpected error occurred.',
+      });
+      setTextContent('');
+    } finally {
+        // Reset file input to allow uploading the same file again
+        if(fileInputRef.current) {
+            fileInputRef.current.value = '';
         }
-      };
-      reader.onerror = () => {
-        clearInterval(interval);
-        setIsExtracting(false);
-        toast({
-          variant: 'destructive',
-          title: 'Error',
-          description: 'Failed to read the file.',
-        });
-      };
-      reader.readAsDataURL(file);
-    }
-    // Reset file input to allow uploading the same file again
-    if(fileInputRef.current) {
-        fileInputRef.current.value = '';
     }
   };
-  
+
   const triggerFileSelect = () => {
     fileInputRef.current?.click();
   }
@@ -162,7 +177,7 @@ export default function QuizConfig({ onQuizGenerated }: QuizConfigProps) {
                  {isExtracting && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80 rounded-md p-8">
                     <LoaderCircle className="h-8 w-8 animate-spin text-primary" />
-                    <p className="mt-4 text-sm font-semibold text-muted-foreground">Extracting text from file...</p>
+                    <p className="mt-4 text-sm font-semibold text-muted-foreground">{uploadStatus}</p>
                     <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 mt-4">
                         <div className="bg-primary h-2.5 rounded-full" style={{ width: `${progress}%`}}></div>
                     </div>
