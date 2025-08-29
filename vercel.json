@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "src/app/actions.ts": {
+      "maxDuration": 300,
+      "memory": 1024,
+      "maxLambdaSize": "25mb"
+    }
+  }
+}
